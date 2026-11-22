@@ -4,6 +4,8 @@ import {
   computeIsDailyCleaned,
   computeIsFunction,
   computeState,
+  isScheduled,
+  isSupported,
 } from "./state.js";
 
 import "./ListState.scss";
@@ -23,11 +25,22 @@ const cssState = (deployment: Workload, state: State, more = "") => {
       "af-table-body-content af-table-body-content--not-daily-cleaned " + more
     );
   }
+  if (!isSupported(deployment)) {
+    return (
+      "af-table-body-content af-table-body-content--unsupported " + more
+    );
+  }
   if (computeIsFunction(deployment)) {
     if (state === "STOPPED") {
       return cssStopped;
     }
     return "af-table-body-content af-table-body-content--function " + more;
+  }
+  // A CronJob has no replicas: its state is suspension, not current/target.
+  if (isScheduled(deployment)) {
+    return deployment.suspended
+      ? cssStopped
+      : "af-table-body-content af-table-body-content--ok " + more;
   }
   if (deployment.current !== deployment.target) {
     return "af-table-body-content af-table-body-content--in-progress " + more;
@@ -36,6 +49,20 @@ const cssState = (deployment: Workload, state: State, more = "") => {
     return cssStopped;
   }
   return "af-table-body-content af-table-body-content--ok " + more;
+};
+
+/**
+ * Ready column text. CronJob rows must not display a fabricated "x/y"
+ * replica ratio; they show whether triggers are suspended instead.
+ */
+const readyText = (workload: Workload) => {
+  if (!isSupported(workload)) {
+    return "not supported";
+  }
+  if (isScheduled(workload)) {
+    return workload.suspended ? "suspended" : "active";
+  }
+  return `${workload.current}/${workload.target}`;
 };
 
 const getTitle = (state: State) => {
@@ -469,6 +496,12 @@ export const ListState = ({
                   {workload.type === "STATEFULSET" && (
                     <Tag className="statefulset">Statefulset</Tag>
                   )}
+                  {isScheduled(workload) && (
+                    <Tag className="cronjob">CronJob</Tag>
+                  )}
+                  {!isSupported(workload) && (
+                    <Tag className="unsupported">Not supported</Tag>
+                  )}
                 </div>
                 <span className="af-table-body-content--containers">
                   {" "}
@@ -477,7 +510,7 @@ export const ListState = ({
               </Table.Td>
               <Table.Td>
                 <span className={cssState(workload, state)}>
-                  {workload.current}/{workload.target}
+                  {readyText(workload)}
                 </span>
               </Table.Td>
               <Table.Td>

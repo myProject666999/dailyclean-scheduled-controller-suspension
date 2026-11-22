@@ -3,14 +3,18 @@ package fr.axa.openpaas.dailyclean.service;
 import fr.axa.openpaas.dailyclean.model.Workload;
 import fr.axa.openpaas.dailyclean.util.KubernetesUtils;
 import fr.axa.openpaas.dailyclean.util.NamespaceVerifier;
+import fr.axa.openpaas.dailyclean.util.wrapper.CronJobWrapper;
 import fr.axa.openpaas.dailyclean.util.wrapper.DeploymentWrapper;
+import fr.axa.openpaas.dailyclean.util.wrapper.IWorkloadWrapper;
 import fr.axa.openpaas.dailyclean.util.wrapper.StatefulSetWrapper;
+import fr.axa.openpaas.dailyclean.util.wrapper.UnsupportedWrapper;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.batch.v1.CronJob;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.kubernetes.client.dsl.ScalableResource;
+import org.apache.commons.lang3.BooleanUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.Logger;
@@ -18,7 +22,9 @@ import org.slf4j.LoggerFactory;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.ws.rs.InternalServerErrorException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -125,7 +131,7 @@ public class KubernetesService {
     }
 
     /**
-     * Get all deployments and statefulsets in the namespace
+     * Get all deployments, statefulsets and opted-in CronJobs in the namespace
      * @return A list of workloads
      */
     public List<Workload> getWorkloads() {
@@ -140,8 +146,53 @@ public class KubernetesService {
                 .stream()
                 .map(statefulSet -> KubernetesUtils.mapWorkload(new StatefulSetWrapper(statefulSet), dailycleanLabelName))
                 .collect(Collectors.toList());
+        var cronJobs = getManagedCronJobWrappers()
+                .stream()
+                .map(wrapper -> KubernetesUtils.mapWorkload(wrapper, dailycleanLabelName))
+                .collect(Collectors.toList());
         deployments.addAll(statefulSets);
+        deployments.addAll(cronJobs);
         return deployments;
+    }
+
+    /**
+     * Get the CronJobs DailyClean is allowed to manage.
+     *
+     * <p>Participation is opt-in: only CronJobs labelled
+     * {@code axa.com/dailyclean=true} are returned. This is deliberately
+     * stricter than Deployments, whose historical default is "participate", so
+     * that upgrading DailyClean never starts suspending previously unmanaged
+     * scheduled jobs.
+     */
+    public List<IWorkloadWrapper> getManagedCronJobWrappers() {
+        List<IWorkloadWrapper> wrappers = new ArrayList<>();
+        for (CronJob cronJob : kubernetesClient.batch().v1().cronjobs()
+                .inNamespace(getNamespace()).list().getItems()) {
+            if (isDailycleanControlCronJob(cronJob.getMetadata().getName())) {
+                // Never treat DailyClean's own start/stop schedulers as user
+                // workloads: suspending one would disable DailyClean itself.
+                continue;
+            }
+            Map<String, String> labels = cronJob.getMetadata().getLabels();
+            Boolean dailycleaned = labels == null
+                    ? null
+                    : BooleanUtils.toBooleanObject(labels.get(dailycleanLabelName));
+            if (dailycleaned == null || !dailycleaned) {
+                continue;
+            }
+            if (cronJob.getSpec() == null) {
+                wrappers.add(new UnsupportedWrapper(cronJob.getMetadata(),
+                        "CronJob has no spec"));
+            } else {
+                wrappers.add(new CronJobWrapper(cronJob));
+            }
+        }
+        return wrappers;
+    }
+
+    private static boolean isDailycleanControlCronJob(String name) {
+        return KubernetesUtils.getCronName(START).equals(name)
+                || KubernetesUtils.getCronName(STOP).equals(name);
     }
 
     public void updatingCronJobIfNeeded() {

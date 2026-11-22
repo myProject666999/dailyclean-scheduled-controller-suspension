@@ -3,6 +3,48 @@ import os
 import sys
 import time
 
+from dailyclean_ops.cluster import (
+    KubernetesCronJobClient,
+    KubernetesHpaReader,
+    utc_now_rfc3339,
+)
+from dailyclean_ops.cronjob import apply_start, apply_stop, opted_in_names
+from dailyclean_ops.restore import plan_restore_with_reader
+
+
+def managed_cron_jobs(aApiClient, namespace):
+    """Return the names of CronJobs explicitly opted in to DailyClean.
+
+    Participation is opt-in (``axa.com/dailyclean: "true"``), unlike the
+    historical Deployment default, so an upgrade never starts suspending
+    previously unmanaged scheduled jobs.
+    """
+    cronjob_client = KubernetesCronJobClient(client.BatchV1Api(aApiClient), namespace)
+    try:
+        return opted_in_names(cronjob_client.list_cron_jobs())
+    except client.exceptions.ApiException as e:
+        print('Error while listing CronJobs (%s).\n' % e)
+        return []
+
+
+def suspend_cron_jobs(aApiClient, namespace):
+    """Suspend (never delete) opted-in CronJobs; running Jobs are untouched."""
+    cronjob_client = KubernetesCronJobClient(client.BatchV1Api(aApiClient), namespace)
+    now = utc_now_rfc3339()
+    outcomes = [apply_stop(cronjob_client, name, now) for name in managed_cron_jobs(aApiClient, namespace)]
+    for outcome in outcomes:
+        print('CronJob %s: %s %s' % (outcome.name, outcome.action.value, outcome.detail))
+    return outcomes
+
+
+def resume_cron_jobs(aApiClient, namespace):
+    """Resume only the suspensions DailyClean still owns (same UID)."""
+    cronjob_client = KubernetesCronJobClient(client.BatchV1Api(aApiClient), namespace)
+    outcomes = [apply_start(cronjob_client, name) for name in managed_cron_jobs(aApiClient, namespace)]
+    for outcome in outcomes:
+        print('CronJob %s: %s %s' % (outcome.name, outcome.action.value, outcome.detail))
+    return outcomes
+
 
 def main():
     if len(sys.argv) > 2 and sys.argv[2] == 'local':
@@ -88,9 +130,18 @@ def manage_kustomizations_suspend_status(aApiClient, namespace, suspend):
 
 def start(aApiClient, namespace):
     appsV1Api_instance = client.AppsV1Api(aApiClient)
+    hpa_reader = KubernetesHpaReader(client.AutoscalingV2Api(aApiClient), namespace)
 
     manage_kustomizations_suspend_status(aApiClient, namespace, suspend=False)
 
+    # Restore the workloads first; only resume CronJobs once that step is done,
+    # so a partially restored namespace never has its schedulers firing again
+    # while its replicas are still down.
+    start_deployments(appsV1Api_instance, namespace, hpa_reader)
+    resume_cron_jobs(aApiClient, namespace)
+
+
+def start_deployments(appsV1Api_instance, namespace, hpa_reader):
     try:
         nodailyclean_deployments = appsV1Api_instance.list_namespaced_deployment(namespace=namespace, watch=False, label_selector='axa.com/dailyclean=false')
     except client.exceptions.ApiException as e:
@@ -105,9 +156,13 @@ def start(aApiClient, namespace):
         print('Error while listing Deployments (%s).\n' % e)
     else:
         for deployment in deployments.items:
-            deployment.spec.replicas = 1
+            plan = plan_restore_with_reader(
+                hpa_reader, 'Deployment', deployment.metadata.name, None, log=print)
+            if not plan.should_restore:
+                continue
+            deployment.spec.replicas = plan.replicas
             appsV1Api_instance.patch_namespaced_deployment(namespace=namespace, name=deployment.metadata.name, body=deployment)
-            print('Deployment %s replicas set to 1.' % deployment.metadata.name)
+            print('Deployment %s replicas set to %d.' % (deployment.metadata.name, plan.replicas))
 
     try:
         stateful_sets = appsV1Api_instance.list_namespaced_stateful_set(namespace=namespace, watch=False, label_selector='axa.com/dailyclean=true')
@@ -115,15 +170,24 @@ def start(aApiClient, namespace):
         print('Error while listing StatefulSet (%s).\n' % e)
     else:
         for stateful_set in stateful_sets.items:
-            stateful_set.spec.replicas = 1
+            plan = plan_restore_with_reader(
+                hpa_reader, 'StatefulSet', stateful_set.metadata.name, None, log=print)
+            if not plan.should_restore:
+                continue
+            stateful_set.spec.replicas = plan.replicas
             appsV1Api_instance.patch_namespaced_stateful_set(namespace=namespace, name=stateful_set.metadata.name, body=stateful_set)
-            print('StatefulSet %s replicas set to 1.' % stateful_set.metadata.name)
+            print('StatefulSet %s replicas set to %d.' % (stateful_set.metadata.name, plan.replicas))
 
 
 def stop(aApiClient, namespace):
     appsV1Api_instance = client.AppsV1Api(aApiClient)
 
     manage_kustomizations_suspend_status(aApiClient, namespace, suspend=True)
+
+    # Suspend opt-in CronJobs first so no new trigger fires during teardown.
+    # This does not terminate Jobs that are already running, and it never
+    # deletes jobs or rewrites schedules; see dailyclean_ops.cronjob.
+    suspend_cron_jobs(aApiClient, namespace)
 
     try:
         appsV1Api_instance.read_namespaced_deployment(namespace=namespace, name='flux')

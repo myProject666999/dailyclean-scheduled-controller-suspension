@@ -68,6 +68,36 @@ metadata:
     axa.com/function: 'true'
 ```
 
+### CronJobs
+
+CronJobs are **not** stopped by default: a CronJob participates only when it
+explicitly opts in, so upgrading DailyClean never suspends previously unmanaged
+scheduled jobs.
+
+```yaml
+metadata:
+  name: nightly-report
+  labels:
+    # required: without this, DailyClean never suspends the CronJob
+    axa.com/dailyclean: 'true'
+```
+
+When managed, DailyClean sets `spec.suspend: true` on stop and records ownership
+with `axa.com/dailyclean-suspend-managed-by`, `-uid` and `-at` annotations. On
+start it resumes only the same object (`metadata.uid`) that it suspended, so a
+recreated CronJob or a manual change is never overridden by a stale record.
+
+> Suspending a CronJob only stops **future** triggers. Jobs already running are
+> not terminated, and on resume Kubernetes may re-create a Job for a missed
+> trigger (subject to `startingDeadlineSeconds` and `concurrencyPolicy`).
+> DailyClean leaves those fields untouched.
+
+Scale targets governed by a HorizontalPodAutoscaler are restored within the
+HPA's current `[minReplicas, maxReplicas]` range; multiple HPAs pointing at the
+same target are reported as a conflict rather than silently taken over. See
+[docs/scheduled-controller-suspension.md](docs/scheduled-controller-suspension.md)
+for the full contract.
+
 ## Configure your DailyClean
 
 | Environment Variable                   | Description                                                                                                                                        | Default value |

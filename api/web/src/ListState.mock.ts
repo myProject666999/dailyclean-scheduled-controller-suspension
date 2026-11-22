@@ -368,3 +368,47 @@ export const mockStateInProgress: ApiData = {
     },
   ],
 };
+
+export const mockCronJobSuspended: ApiData = {
+  namespace: "ri-openfaas-fn-dev-fr",
+  state: "STOPPED",
+  workloads: [
+    {
+      id: "nightly-report",
+      isDailycleaned: true,
+      current: 0,
+      target: 0,
+      suspended: true,
+      type: "CRONJOB",
+    },
+  ],
+};
+
+export const mockCronJobActive: ApiData = {
+  namespace: "ri-openfaas-fn-dev-fr",
+  state: "STARTED",
+  workloads: [
+    {
+      id: "nightly-report",
+      isDailycleaned: true,
+      current: 1,
+      target: 1,
+      suspended: false,
+      type: "CRONJOB",
+    },
+  ],
+};
+
+export const mockUnsupported: ApiData = {
+  namespace: "ri-openfaas-fn-dev-fr",
+  state: "STOPPED",
+  workloads: [
+    {
+      id: "custom-things",
+      isDailycleaned: true,
+      current: 0,
+      target: 0,
+      type: "UNSUPPORTED",
+    },
+  ],
+};

@@ -108,6 +108,15 @@ public final class KubernetesUtils {
             res.setCurrent(BigDecimal.valueOf(workload.getReadyReplicas()));
         }
 
+        // Scheduled workloads (CronJob) have no replica count: their "stopped"
+        // state is suspension. Always expose the flag so /status can judge them
+        // by spec.suspend rather than by replicas.
+        if(workload.getType() == Workload.TypeEnum.CRONJOB) {
+            res.setSuspended(workload.isSuspended());
+            res.setTarget(BigDecimal.valueOf(workload.getReplicas()));
+            res.setCurrent(BigDecimal.valueOf(workload.getReadyReplicas()));
+        }
+
         Boolean dailycleaned = null;
         Map<String, String> labels = metadata.getLabels();
         if(labels != null) {

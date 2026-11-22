@@ -37,6 +37,19 @@ public interface IWorkloadWrapper <S, P> {
     int getReadyReplicas();
 
     /**
+     * Whether this workload is currently suspended.
+     *
+     * <p>Only meaningful for scheduled workloads (CronJob), where "stopped"
+     * means {@code spec.suspend=true} rather than a replica count. Replica
+     * based workloads return {@code false}.
+     *
+     * @return true when this workload's triggers are suspended
+     */
+    default boolean isSuspended() {
+        return false;
+    }
+
+    /**
      * Get the spec representation for this workload
      * @return an object which is the representation of the spec of this workload, type is P
      */

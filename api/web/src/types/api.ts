@@ -34,11 +34,26 @@ export type Container = {
   }>;
 };
 
+export type WorkloadType =
+  | "DEPLOYMENT"
+  | "STATEFULSET"
+  | "CRONJOB"
+  | "UNSUPPORTED";
+
 export type Workload = {
   id: string;
   isDailycleaned: boolean;
   current: number;
   target: number;
+  /**
+   * For CRONJOB workloads only: whether triggers are suspended. `undefined`
+   * for replica-based workloads and for older API responses.
+   */
+  suspended?: boolean;
+  /**
+   * Workload kind. Declared as a plain string so an unknown future value can
+   * never crash rendering; the known values are documented in WorkloadType.
+   */
   type?: string;
   labels?: {
     [key: string]: string;

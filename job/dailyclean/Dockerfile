@@ -24,5 +24,6 @@ WORKDIR ${APP_ROOT}
 
 COPY --chown=${USER} --from=build ${APP_ROOT}/packages ./.local
 COPY --chown=${USER} dailyclean.py ${APP_ROOT}
+COPY --chown=${USER} dailyclean_ops ${APP_ROOT}/dailyclean_ops
 
 ENTRYPOINT ["/usr/bin/python3.12", "dailyclean.py"]

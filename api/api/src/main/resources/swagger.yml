@@ -144,6 +144,11 @@ components:
           format: int32
         isDailycleaned:
           type: boolean
+        suspended:
+          type: boolean
+          description: >-
+            For CronJob workloads only: whether triggers are suspended
+            (spec.suspend). Absent for Deployment and StatefulSet.
         containers:
           type: array
           items:
@@ -161,6 +166,13 @@ components:
           enum:
             - DEPLOYMENT
             - STATEFULSET
+            - CRONJOB
+            - UNSUPPORTED
+          description: >-
+            Workload kind. CRONJOB is only present when
+            axa.com/dailyclean=true. UNSUPPORTED marks an object DailyClean
+            recognises but cannot manage; clients must not assume a replica
+            based state for it.
     Container:
       properties:
         name:

@@ -1,19 +1,27 @@
 import { State, Workload } from "./types/api";
 
-export const computeState = (workloads: Workload[]): State => {
-  const workloadInProgress = workloads.find(
-    (w) =>
-      !computeIsFunction(w) &&
-      w.current === 0 &&
-      w.target > 0 &&
-      computeIsDailyCleaned(w),
-  );
-  if (workloadInProgress) return "IN_PROGRESS";
+/** A CronJob's "started"/"stopped" is its suspension, never its replicas. */
+export const isScheduled = (workload: Workload) =>
+  workload.type === "CRONJOB";
 
-  const workloadStopped = workloads.find(
-    (w) => !computeIsFunction(w) && w.target === 0 && computeIsDailyCleaned(w),
+export const isSupported = (workload: Workload) =>
+  workload.type !== "UNSUPPORTED";
+
+export const computeState = (workloads: Workload[]): State => {
+  const managed = workloads.filter(
+    (w) => !computeIsFunction(w) && isSupported(w) && computeIsDailyCleaned(w),
   );
-  return workloadStopped != null ? "STOPPED" : "STARTED";
+
+  // Replica-based workloads keep the historical rules unchanged.
+  const replicaInProgress = managed.find(
+    (w) => !isScheduled(w) && w.current === 0 && w.target > 0,
+  );
+  if (replicaInProgress) return "IN_PROGRESS";
+
+  const stopped = managed.find((w) =>
+    isScheduled(w) ? Boolean(w.suspended) : w.target === 0,
+  );
+  return stopped != null ? "STOPPED" : "STARTED";
 };
 
 export const computeIsFunction = (workload: Workload) => {
